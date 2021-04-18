@@ -25,10 +25,12 @@ type Record struct {
 }
 
 var gSymbols []string
+var gName map[string]string
 
 const urlFmt = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz002095&scale=60&ma=no&datalen=1023"
 
 func init() {
+	gName = make(map[string]string)
 	f := func(rs []string, pre string) {
 		for _, s := range rs {
 			ss := strings.Split(s, "(")
@@ -37,6 +39,7 @@ func init() {
 			}
 			sss := strings.Split(ss[1], ")")
 			symbol := pre + sss[0]
+			gName[symbol] = ss[0]
 			gSymbols = append(gSymbols, symbol)
 		}
 	}
@@ -47,6 +50,7 @@ func init() {
 }
 
 var rejectErr = errors.New("reject")
+
 func getKline(symbol string) (records []Record, err error) {
 	url := strings.Replace(urlFmt, "sz002095", symbol, -1)
 	resp, err := http.Get(url)
@@ -130,37 +134,43 @@ func isTurnUp(avgPrices []float64) bool {
 
 var (
 	goodStocks []string
+	thisStocks []string
 	mark       map[int64]struct{}
 	mut        sync.Mutex
 )
 
 func handleSymbols(ctx context.Context, symbols []string) {
-	goods := make([]string, 0)
+	mut.Lock()
+	thisStocks = make([]string, 0)
+	mut.Unlock()
+
 	for i, symbol := range symbols {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second * 2)
 		log.Infof("handle %v: %v", i, symbol)
 		var avgKline []float64
-		for loop := 0; loop < 5; loop++{
+		for loop := 0; loop < 5; loop++ {
 			kine, err := getAvgKLines(symbol)
 			if err == rejectErr {
 				time.Sleep(time.Minute * 5)
-			}else {
+			} else {
 				avgKline = kine
 				break
 			}
 		}
 		if isTurnUp(avgKline) {
-			log.Infof("%v", symbol)
-			goods = append(goods, symbol)
+			log.Infof("found %v", symbol)
+			mut.Lock()
+			thisStocks = append(thisStocks, symbol)
+			mut.Unlock()
 		}
 	}
 	mut.Lock()
-	goodStocks = goods
+	goodStocks = thisStocks
 	mut.Unlock()
 }
 
@@ -192,10 +202,20 @@ func run(ctx context.Context) {
 }
 
 func getGoodStocks(c *gin.Context) {
+	ret := make(map[string]string)
 	mut.Lock()
 	defer mut.Unlock()
+	if len(goodStocks) > 0 {
+		for _, s := range goodStocks {
+			ret[s] = gName[s]
+		}
+	} else {
+		for _, s := range thisStocks {
+			ret[s] = gName[s]
+		}
+	}
 
-	c.JSON(http.StatusOK, goodStocks)
+	c.IndentedJSON(http.StatusOK, ret)
 }
 
 func runHttp(port int) {
