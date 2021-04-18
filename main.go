@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
+	"github.com/gin-gonic/gin"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/liyue201/golib/xsignal"
 	"io/ioutil"
 	"net/http"
-	"github.com/liyue201/golib/xsignal"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +46,7 @@ func init() {
 	log.Infof("total: %v", len(gSymbols))
 }
 
+var rejectErr = errors.New("reject")
 func getKline(symbol string) (records []Record, err error) {
 	url := strings.Replace(urlFmt, "sz002095", symbol, -1)
 	resp, err := http.Get(url)
@@ -52,8 +56,8 @@ func getKline(symbol string) (records []Record, err error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Infof("failed to get: %v", symbol)
-		return nil, errors.New("aaa")
+		log.Infof("failed to get: %v, %v", symbol, resp.StatusCode)
+		return nil, rejectErr
 	}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -95,15 +99,15 @@ func getAvgPrice(prices []float64, day, back int) float64 {
 	return sum / float64(day)
 }
 
-func getAvgKLines(symbol string) []float64 {
+func getAvgKLines(symbol string) ([]float64, error) {
 	records, err := getKline(symbol)
 	if err != nil {
-		return nil
+		return nil, rejectErr
 	}
 	prices := convert(records)
 	//log.Infof("%v: %v", symbol, prices)
 	if len(prices) < 55+7 {
-		return nil
+		return nil, nil
 	}
 	n := 7
 	avgPrices := make([]float64, n)
@@ -111,7 +115,7 @@ func getAvgKLines(symbol string) []float64 {
 		avgPrices[n-i-1] = getAvgPrice(prices, 55, i)
 	}
 	//log.Infof("avg %v: %v", symbol, avgPrices)
-	return avgPrices
+	return avgPrices, nil
 }
 
 func isTurnUp(avgPrices []float64) bool {
@@ -140,7 +144,16 @@ func handleSymbols(ctx context.Context, symbols []string) {
 		}
 		time.Sleep(time.Second)
 		log.Infof("handle %v: %v", i, symbol)
-		avgKline := getAvgKLines(symbol)
+		var avgKline []float64
+		for loop := 0; loop < 5; loop++{
+			kine, err := getAvgKLines(symbol)
+			if err == rejectErr {
+				time.Sleep(time.Minute * 5)
+			}else {
+				avgKline = kine
+				break
+			}
+		}
 		if isTurnUp(avgKline) {
 			log.Infof("%v", symbol)
 			goods = append(goods, symbol)
@@ -178,10 +191,30 @@ func run(ctx context.Context) {
 	}()
 }
 
+func getGoodStocks(c *gin.Context) {
+	mut.Lock()
+	defer mut.Unlock()
+
+	c.JSON(http.StatusOK, goodStocks)
+}
+
+func runHttp(port int) {
+	engine := gin.Default()
+	engine.GET("/api/stocks", getGoodStocks)
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	httpServer := &http.Server{Addr: addr, Handler: engine}
+	go func() {
+		httpServer.ListenAndServe()
+	}()
+}
+
 func main() {
+	port := flag.Int("port", 9561, "--port")
+	flag.Parse()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	run(ctx)
+	runHttp(*port)
 	xsignal.Wait()
 }
