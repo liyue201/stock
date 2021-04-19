@@ -189,7 +189,7 @@ func run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if time.Now().Hour() == 16 {
+				if time.Now().Hour() == 8 {
 					h := time.Now().Unix() / 60 / 60
 					if _, ok := mark[h]; !ok {
 						handleSymbols(ctx, gSymbols)
