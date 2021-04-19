@@ -24,31 +24,6 @@ type Record struct {
 	Close string `json:"close"`
 }
 
-var gSymbols []string
-var gName map[string]string
-
-const urlFmt = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz002095&scale=60&ma=no&datalen=1023"
-
-func init() {
-	gName = make(map[string]string)
-	f := func(rs []string, pre string) {
-		for _, s := range rs {
-			ss := strings.Split(s, "(")
-			if len(ss) < 1 {
-				continue
-			}
-			sss := strings.Split(ss[1], ")")
-			symbol := pre + sss[0]
-			gName[symbol] = ss[0]
-			gSymbols = append(gSymbols, symbol)
-		}
-	}
-	f(shangzheng, "sh")
-	f(sz, "sz")
-	f(chuangye, "sz")
-	log.Infof("total: %v", len(gSymbols))
-}
-
 var rejectErr = errors.New("reject")
 
 func getKline(symbol string) (records []Record, err error) {
@@ -144,7 +119,32 @@ func handleSymbols(ctx context.Context, symbols []string) {
 	thisStocks = make([]string, 0)
 	mut.Unlock()
 
+	var bigSymbols []string
 	for i, symbol := range symbols {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		time.Sleep(time.Second / 10)
+		var value float64
+		for loop := 0; loop < 5; loop++ {
+			v, err := getValue(symbol)
+			if err == rejectErr {
+				time.Sleep(time.Minute * 5)
+			} else {
+				value = v
+				break
+			}
+		}
+		log.Infof("value %v, %v : %v", i, symbol, value)
+		if value < 300 {
+			continue
+		}
+		bigSymbols = append(bigSymbols, symbol)
+	}
+	log.Infof("bigSymbol num: %v", len(bigSymbols))
+	for i, symbol := range bigSymbols {
 		select {
 		case <-ctx.Done():
 			return
